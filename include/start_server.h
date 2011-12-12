@@ -13,4 +13,5 @@
  */
 int start_server(char* socket_str); 
 
+//Start listening on socket that accepts new clients
 int start_listening(int socket_fd); 

@@ -20,14 +20,14 @@ void add_to_list(list* l, void* data) { //Adds node to list and returns the new 
 	l->head = new_head; 
 }
 
-void remove_front(list* l) { //Removes a node from the front and frees the data
+void remove_front(list* l) { //Removes a node from the front. Doesn't free data, because I need to manage it for this project
 	if (l->head == NULL) {
 		return; 
 	}
 
 	node* old_head = l->head; 
 	l->head = old_head->next; 
-	(*(l->free_data))(old_head); //Call function to free the old head
+	free(old_head); //Call function to free the old head
 }
 
 void remove_node(list* l, void* data){ //Removes node from list without freeing data
@@ -72,4 +72,10 @@ int list_size(list* l) { //Count number of nodes in a list
 	}
 
 	return cnt; 
+}
+
+bool is_empty(list* l) {
+	if (l->head == NULL)
+		return true; 
+	return false; 
 }

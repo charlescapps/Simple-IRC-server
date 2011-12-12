@@ -1,19 +1,21 @@
-#include "stdio.h"
-#include "stdlib.h"
-#include "unistd.h"
-#include "string.h"
-#include "stdbool.h"
-#include "sys/socket.h"
-#include "sys/types.h"
-#include "netdb.h"
-#include "errno.h"
-#include "signal.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdbool.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netdb.h>
+#include <errno.h>
+#include <signal.h>
 
 #include "include/users.h"
 #include "include/start_server.h"
-#include "include/my_funcs.h"
+#include "include/misc.h"
 #include "include/commands.h"
+#include "include/constants.h"
 #include "include/server_mutexes.h"
+#include "include/global_server_cmds.h"
 
 //As soon as we accept a client, we start a new thread so we can continue accepting clients. 
 //We need this struct with the barebones information about a client so we can just call pthread_create with one arument
@@ -21,8 +23,6 @@ typedef struct user_info_s {
 	pthread_t my_thread; 
 	int my_socket; 
 } user_info; 
-
-const char* CONNECT_MSG = "+PRINT Connected as user '%s'.\nNow entering lobby.\n"; 
 
 void accept_loop(int welcome_socket); 
 char* parse_connect_cmd(char* cmd, bool* quit); //Returns the nick for connect cmd
@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
 	int error_number; 
 
 	if (argc != 2) {
-		fprintf(stderr, "Error- need exactly 1 argument. Usage: test_server <socket_no>\n"); 
+		fprintf(stderr, "Error- need exactly 1 argument. Usage: run_server <socket_no>\n"); 
 		exit(EXIT_FAILURE); 
 	}
 
@@ -47,18 +47,21 @@ int main(int argc, char** argv) {
 
 	//Call another function to start listening on this socket. 
 	if ( (error_number = start_listening(socket_fd)) < 0) {
-		fprintf(stderr, "Error listening on socket: %s\n", strerror(errno)); 
+		fprintf(stderr, "Error listening on socket: %s\nExiting...\n", strerror(errno)); 
 		exit(EXIT_FAILURE); 
 	}
 
 	//register function to deal with a broken pipe, e.g. when client exits program and server tries to write to stream
-	signal(SIGPIPE, catch_broken_pipe); 
+	//signal(SIGPIPE, catch_broken_pipe); 
 
 	//Init mutexes used 
 	init_mutexes(); 
 
 	//Init list of users to empty list
 	init_user_list(); 
+
+	//Init list of chat rooms to empty list, instantiate lobby chat room
+	init_chat_rooms(); 
 
 	//Start loop to accept clients
 	accept_loop(socket_fd); 
@@ -70,6 +73,7 @@ void accept_loop(int server_socket) {
 
 	int new_socket_fd = -1; //File descriptor of connecting client
 	socklen_t client_length = sizeof(struct sockaddr); 
+
 	struct sockaddr client_addr; 
 	user_info* ui; 
 
@@ -89,43 +93,74 @@ void accept_loop(int server_socket) {
 		ui -> my_socket = new_socket_fd; 
 
 		pthread_create(&(ui->my_thread), NULL, (void*(*)(void*))wait_for_connect_cmd, (void*)(ui)); 
-
 	}
 }
 
+
+
 //Wait until user types +CONNECT <nick> to enter the lobby
 void wait_for_connect_cmd(user_info* ui) {
-	char buffer[BUFFER_SIZE]; 
+	char partial_cmd[BUFFER_SIZE]; char to_send[BUFFER_SIZE];  
+	char* next_cmd = NULL; char* nick = NULL; 
+	bool err = false; bool quit = false; 
 	int user_thread = ui->my_thread; 
 	int new_socket_fd = ui->my_socket; 
-	char* nick = NULL; 
-	bool quit = false; 
 
-	//While user inputs invalid connect command, try to read again
-	while (nick == NULL) {
-		if (read(new_socket_fd, buffer, BUFFER_SIZE) < 0) {
-			printf("Error reading message from client\n"); 
-			continue; 
-		}	
-		else {
-			printf("Received from client: %s\n", buffer); 
-			trim_str(buffer); 
-			nick = parse_connect_cmd(buffer, &quit); 
-		}
-		if (quit==true) {
-			printf("Received +QUIT command from client. Terminating thread for client socket %d.\n", new_socket_fd); 
+	partial_cmd[0]='\0';	
+
+	//While user inputs invalid connect command, keep reading commands from user
+	while (true) {
+		quit = false;
+
+		if (next_cmd) 
+			free(next_cmd); 
+
+		next_cmd = get_next_cmd(new_socket_fd, partial_cmd, &err); 
+
+		if (err) {
+			printf("Error reading message from client. Terminating client socket %d\nError: %s\n", new_socket_fd, strerror(errno)); 
 			close(new_socket_fd); 
+			free(ui); 
+			if (next_cmd) 
+				free(next_cmd); 
 			pthread_exit(NULL); 
 		}
-		if (nick == NULL) {
-			printf("Nick from client is NULL...sending fail msg.\n");
+		else if (next_cmd == NULL) { //Havne't yet received a full command. 
+			continue; 
+		}
+		else {
+			printf("Received msg from client: '%s'\n", next_cmd); 
+			trim_str(next_cmd); 
+			nick = parse_connect_cmd(next_cmd, &quit); 
+		}
+
+		if (quit==true) {
+			printf("Received +QUIT command from client. Terminating client socket %d.\n", new_socket_fd); 
+			close(new_socket_fd); //close socket
+			free(ui); 
+			free(next_cmd); 
+			pthread_exit(NULL); //free user
+		}
+		else if (nick == NULL) {
+			printf("NULL nick received from client\n");
 			write(new_socket_fd, FAIL_CMD, strlen(FAIL_CMD) + 1); 
-			continue; 	
+		}
+		else if (user_exists(nick)) {
+			printf("Nick %s already exists.\n", nick);
+			sprintf(to_send, "%s Nick already exists. Please try again with a different nick.\n", PRINT_CMD); 
+			write(new_socket_fd, to_send, strlen(to_send) + 1); 
+			free(nick); 
+		}
+		else if (!valid_charset(nick)) {
+			printf("Nick %s not in valid charset.\n", nick); 
+			sprintf(to_send, "%s Nick contains invalid chars. \n" 
+							"Must be alphanumeric or '-', '_', '&', '*'.\n ", PRINT_CMD); 
+			write(new_socket_fd, to_send, strlen(to_send) + 1); 
+			free(nick); 
 		}
 		else {
 			printf("New user '%s' entering lobby.\n", nick);  
-			sprintf(buffer, CONNECT_MSG, nick);
-			write(new_socket_fd, buffer, strlen(buffer) + 1); 
+			free(next_cmd); 
 			init_user(nick, new_socket_fd, user_thread); 				
 		}
 	}
@@ -137,8 +172,8 @@ char* parse_connect_cmd(char* cmd, bool* quit) {
 	char* tok1 = strtok(cmd, " "); 
 	char* tok2 = strtok(NULL, " "); 
 
-	if (tok1 == NULL || tok2 == NULL) {
-		printf("Null msg received from client\n"); 
+	if (tok1 == NULL) {
+		printf("Empty msg received from client.\n"); 
 		return NULL; 
 	}
 
@@ -147,8 +182,7 @@ char* parse_connect_cmd(char* cmd, bool* quit) {
 		return NULL; 
 	}
 
-	if (strcmp(tok1, CONNECT_CMD) != 0) {
-		printf("Invalid connect command from client without nick: %s\n", tok1); 
+	if (strcmp(tok1, CONNECT_CMD) != 0 || tok2 == NULL) {
 		return NULL; 
 	}
 
@@ -161,6 +195,6 @@ char* parse_connect_cmd(char* cmd, bool* quit) {
 }
 
 void catch_broken_pipe(int signum) {
-	printf("Pipe broken trying to read from user's socket. Terminating user's thread.\n"); 
+	printf("Pipe broken trying to write to user's socket. Terminating user's thread.\n"); 
 	pthread_exit(NULL); //Quit the thread for this user if a broken pipe occurs
 }

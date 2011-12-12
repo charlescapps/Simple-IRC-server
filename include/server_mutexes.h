@@ -7,6 +7,7 @@ pthread_mutex_t sock_mutex; //Guarantee 2 threads don't simultaneously write to 
 pthread_mutex_t users_mutex; //Guarantee 2 threads don't both modify user list
 pthread_mutex_t chat_room_mutex; //Guarantee 2 threads don't both modify chat room list
 
+//Must be called by server code before command loop
 void init_mutexes(); 
 
 #endif

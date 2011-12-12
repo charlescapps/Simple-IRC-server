@@ -44,15 +44,22 @@ void remove_user(user* u) { //removes user from all_users list, current chat roo
 }
 
 void set_user_prompt(user* u, char* new_prompt) {
-	int max_prompt_size = 100;
-	char msg_to_client[max_prompt_size]; 
+
+	char msg_to_client[BUFFER_SIZE]; 
+	int bytes_written;
+	
 	sprintf(msg_to_client, "%s %s", SET_PROMPT_CMD, new_prompt); 
 
 	pthread_mutex_lock(&(u->user_sock_mutex)); //atomically write to user's socket using user's mutex
-	if (write(u->user_socket, msg_to_client, strlen(msg_to_client) + 1) < 0) {
-		printf("Error sending new prompt to user.\n"); 
-	}
+	bytes_written = send(u->user_socket, msg_to_client, strlen(msg_to_client) + 1, 0);
 	pthread_mutex_unlock(&(u->user_sock_mutex)); 
+
+	if (bytes_written < 0) {
+		printf("Error sending new prompt.\nError: %s\n", strerror(errno)); 
+	}
+	else if (bytes_written == 0) {
+		printf("Error sending new prompt: 0 bytes written.\nError: %s\n", strerror(errno)); 
+	}
 }
 
 bool user_exists(char* nick) {
@@ -63,7 +70,7 @@ bool user_exists(char* nick) {
 
 	while (iter != NULL) {
 		tmp_u = (user*)iter->data;
-		if (strcmp(tmp_u->nick, nick)==0) { 
+		if (strcasecmp(tmp_u->nick, nick)==0) { 
 			exists = true; 
 			break;
 		}

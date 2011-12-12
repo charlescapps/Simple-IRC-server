@@ -2,6 +2,7 @@
 #define _LIST
 
 #include <stdlib.h>
+#include <stdbool.h>
 
 typedef struct node_struct node; //Forward declaration so a list can have a next pointer
 
@@ -26,10 +27,13 @@ list* new_list(void (*free_fnc)(void*)); //Allocate a new empty list. Pass in fu
 
 void add_to_list(list* l, void* data); //Adds node to list and returns the new head
 
-void remove_front(list* l); //Removes a node from the front and frees the data
+void remove_front(list* l); //Removes a node from the front and frees the node. Doesn't free data, because
+//for this project we may need to remove a user from multiple lists, then free the actual data. 
 
 int list_size(list* l); //Count number of nodes in a list
 
-void remove_node(list* l, void* data); //Removes node from list without freeing data
+void remove_node(list* l, void* data); //Removes node from list and frees node, without freeing data
+
+bool is_empty(list* l); 
 
 #endif
